@@ -1,0 +1,5 @@
+__pycache__   # compiled Python bytecode cache directories — never needed in the image
+*.pyc         # compiled Python files — regenerated automatically, no need to ship them
+.env          # local secrets file — must never be baked into the image
+.git          # version control history — irrelevant to the running app, bloats the build context
+.venv         # local virtual environment — dependencies install fresh inside the image instead

@@ -1,0 +1,10 @@
+fastapi==0.115.0                  # web framework used to build the API
+uvicorn[standard]==0.32.0         # ASGI server that runs the FastAPI app; [standard] adds performance/dev extras
+sqlalchemy==2.0.36                # ORM / query layer used for both the api and sync database access
+asyncpg==0.30.0                   # async PostgreSQL driver — used by the FastAPI app's async DB session
+psycopg2-binary==2.9.10           # sync PostgreSQL driver — used by the sync job's pandas/SQLAlchemy writes
+pymssql                           # SQL Server client — precompiled wheel, no ODBC driver or system packages needed
+pandas==2.2.3                     # reads source query results in chunks and writes them to the cache DB
+pyyaml==6.0.2                     # parses config/config.yaml into a Python dict
+pydantic-settings==2.6.1          # loads/validates environment variables and .env into the Settings class
+apscheduler==3.10.4               # in-process cron-style scheduler that runs the sync job daily

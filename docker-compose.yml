@@ -1,0 +1,90 @@
+# docker-compose.yml — defines and wires together the four containers that make up the app:
+# postgres (cache DB), sync (daily ETL job), api (FastAPI), and web (React + nginx).
+services:                                # top-level key: declares every container ("service") this file manages
+  postgres:                              # service name "postgres" — also used as its hostname on the docker network
+    image: postgres:16-alpine            # official Postgres 16 image, alpine variant for a smaller image size
+    restart: unless-stopped              # auto-restart this container if it crashes, unless it was manually stopped
+    environment:                         # env vars passed into the postgres container at startup
+      POSTGRES_DB: ${CACHE_DB_NAME:-app_cache}      # database to create on first run; defaults to "app_cache" if unset in .env
+      POSTGRES_USER: ${CACHE_DB_USER:-app_user}     # superuser to create for that database; defaults to "app_user"
+      POSTGRES_PASSWORD: ${CACHE_DB_PASSWORD}       # password for that user; must be set in .env, no default for security
+    volumes:                             # persistent storage mounts
+      - postgres_data:/var/lib/postgresql/data      # named volume mapped to Postgres's data dir, so data survives restarts/rebuilds
+    healthcheck:                         # tells docker how to check this container is actually ready, not just running
+      test: ["CMD-SHELL", "pg_isready -U ${CACHE_DB_USER:-app_user}"]  # succeeds once Postgres accepts connections
+      interval: 10s                      # run the healthcheck every 10 seconds
+      timeout: 5s                        # give each attempt up to 5 seconds before considering it failed
+      retries: 5                         # mark "unhealthy" only after 5 consecutive failures
+    networks:                            # which docker networks this service joins
+      - backend_net                      # lets other services resolve it by the name "postgres"
+    # No host port published — only api/sync (inside the network) need to reach it.
+    # Uncomment below temporarily if you want to inspect it with a local DB client.
+    # ports:
+    #   - "5432:5432"
+
+  sync:                                  # service name "sync" — runs the daily ETL job, never accessed by users directly
+    build:                               # build this image from a Dockerfile instead of pulling a pre-built one
+      context: ./backend                 # build context is ./backend, which holds the Dockerfile and app code
+    restart: unless-stopped              # restart automatically if the process exits unexpectedly (e.g. a crash mid-sync)
+    command: ["python", "-m", "app.sync"]  # override the image's default CMD — run the sync scheduler instead of the API
+    environment:                         # env vars this specific container needs
+      CACHE_DB_HOST: postgres            # "postgres" resolves via docker's internal DNS to the postgres service above
+      CACHE_DB_PORT: "5432"              # Postgres's default port (quoted — compose env values are strings)
+      CACHE_DB_NAME: ${CACHE_DB_NAME:-app_cache}    # must match what postgres was initialized with above
+      CACHE_DB_USER: ${CACHE_DB_USER:-app_user}     # must match the postgres user created above
+      CACHE_DB_PASSWORD: ${CACHE_DB_PASSWORD}       # must match the postgres password set above
+      SOURCE_DB_HOST: ${SOURCE_DB_HOST}             # hostname/IP of your real source database, from .env
+      SOURCE_DB_PORT: ${SOURCE_DB_PORT:-1433}       # source DB port, defaults to SQL Server's standard port
+      SOURCE_DB_NAME: ${SOURCE_DB_NAME}             # name of the source database to read from
+      SOURCE_DB_USER: ${SOURCE_DB_USER}             # read credentials for the source database
+      SOURCE_DB_PASSWORD: ${SOURCE_DB_PASSWORD}     # password for that user
+      CONFIG_PATH: /app/config/config.yaml          # tells the app where to find the mounted config file inside the container
+    volumes:                             # files/folders shared between host and container
+      - ./config/config.yaml:/app/config/config.yaml:ro  # mount config.yaml read-only at the path CONFIG_PATH points to
+    depends_on:                          # startup ordering — don't start until the dependency is ready
+      postgres:
+        condition: service_healthy       # wait for postgres's healthcheck to pass, not just for the container to start
+    networks:
+      - backend_net                      # join the same network so it can reach "postgres" by name
+
+  api:                                   # service name "api" — the FastAPI app the frontend and external clients call
+    build:
+      context: ./backend                 # same build context/image as "sync" — same Dockerfile, different command
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]  # run FastAPI via uvicorn on all interfaces
+    environment:
+      CACHE_DB_HOST: postgres            # same cache DB connection details as the sync job — both use the same database
+      CACHE_DB_PORT: "5432"
+      CACHE_DB_NAME: ${CACHE_DB_NAME:-app_cache}
+      CACHE_DB_USER: ${CACHE_DB_USER:-app_user}
+      CACHE_DB_PASSWORD: ${CACHE_DB_PASSWORD}
+      CONFIG_PATH: /app/config/config.yaml          # api also reads config.yaml, e.g. for CORS origins
+    volumes:
+      - ./config/config.yaml:/app/config/config.yaml:ro  # same config mount as sync
+    depends_on:
+      postgres:
+        condition: service_healthy       # don't start serving requests before the cache DB is ready
+    ports:
+      - "8000:8000"                      # publish container port 8000 to host port 8000, for calling the API directly in dev
+    networks:
+      - backend_net
+
+  web:                                   # service name "web" — builds the React app and serves it via nginx
+    build:
+      context: ./frontend                # build context is ./frontend, which has its own Dockerfile
+      args:                              # build-time arguments passed into the Dockerfile's ARG instructions
+        VITE_API_URL: ${VITE_API_URL:-/api}  # baked into the React build — tells the frontend where to send API calls
+    restart: unless-stopped
+    depends_on:
+      - api                              # start after "api" (a soft hint — doesn't wait for api to be fully ready)
+    ports:
+      - "80:80"                          # publish nginx's port 80 to host port 80 — what you open in a browser
+    networks:
+      - backend_net                      # joins the network so nginx can proxy /api/ requests to "api" by name
+
+volumes:                                 # top-level declaration of named volumes used above
+  postgres_data:                         # referenced by the postgres service — docker manages its storage on disk
+
+networks:                                # top-level declaration of custom networks used above
+  backend_net:                           # name of the network
+    driver: bridge                       # standard docker bridge network — private internal network with DNS discovery

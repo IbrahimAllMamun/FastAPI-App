@@ -1,0 +1,25 @@
+# Non-secret application configuration.
+# Credentials and hostnames live in .env (see .env.example) — keep this file
+# safe to commit to git.
+
+log_level: INFO                      # logging verbosity for both the api and sync containers
+
+sync:                                # settings specific to the daily sync job
+  # Cron expression (min hour day month day_of_week). Runs once daily at 2 AM —
+  # adjust to land safely after your source DB's own nightly sync finishes.
+  schedule_cron: "0 2 * * *"         # minute=0, hour=2, every day/month/weekday -> 2:00 AM daily
+  batch_size: 5000                   # rows pulled from the source DB per chunk, to avoid loading huge tables into memory
+  tables:                            # list of tables to mirror from the source DB into the cache DB
+    - source: "dbo.customers"        # fully-qualified table/view name to query in the source DB
+      target: "customers"            # table name to create/replace in the cache DB
+    - source: "dbo.orders"           # second example table — same pattern
+      target: "orders"
+    # Add one entry per table/view you need mirrored into the cache DB.
+    # `source` is the query target in the source DB, `target` is the table
+    # name created in the cache DB.
+
+api:                                  # settings specific to the FastAPI app
+  cors_origins:                       # browser origins allowed to call this API directly (CORS allow-list)
+    - "http://localhost:5173"         # local Vite dev server, so React works outside docker during development
+  page_size_default: 50               # default rows returned per page on paginated endpoints
+  page_size_max: 500                  # hard cap on page size a client can request
